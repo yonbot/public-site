@@ -10,7 +10,7 @@ interface AddressForm {
   building: string;
 }
 
-const formSubject = new BehaviorSubject<AddressForm>({
+const formSubject$ = new BehaviorSubject<AddressForm>({
   postalCode: '',
   prefecture: '',
   city: '',
@@ -28,17 +28,20 @@ function App() {
   });
 
   const [isValid, setIsValid] = useState(false);
+  
+  // 【日本語IME制御】未確定状態を管理
+  const [isComposing, setIsComposing] = useState(false);
 
   useEffect(() => {
-    const subscription = formSubject
+    const subscription = formSubject$
       .pipe(
-        debounceTime(300),
+        debounceTime(50),
         distinctUntilChanged(
           (prev, curr) => JSON.stringify(prev) === JSON.stringify(curr)
         )
       )
-      .subscribe((formData) => {
-        setForm(formData);
+      .subscribe((formData: AddressForm) => {
+        // setForm(formData); // 重複更新を防ぐため削除
         setIsValid(
           formData.postalCode.length >= 7 &&
             formData.prefecture.length > 0 &&
@@ -51,14 +54,47 @@ function App() {
   }, []);
 
   const handleInputChange = (field: keyof AddressForm, value: string) => {
+    // 【郵便番号の入力制限】
+    if (field === 'postalCode') {
+      // 正規表現 /^\d{0,7}$/ の説明：
+      // ^ = 文字列の開始
+      // \d = 数字（0-9）
+      // {0,7} = 0文字以上7文字以下
+      // $ = 文字列の終了
+      // 結果: 空文字または1〜7桁の数字のみ許可
+      if (!/^\d{0,7}$/.test(value)) {
+        // 不正な入力の場合、処理を中断して何もしない
+        return;
+      }
+    }
+    
+    // 【改善されたIME制御】
+    // 1. React stateは常に更新（文字が表示されるため）
     const updatedForm = { ...form, [field]: value };
-    formSubject.next(updatedForm);
+    setForm(updatedForm);
+    
+    // 2. RxJSへの送信はIME入力中はスキップ
+    if (!isComposing) {
+      formSubject$.next(updatedForm);
+    }
+  };
+
+  // 【IME制御関数】
+  const handleCompositionStart = () => {
+    setIsComposing(true);
+  };
+
+  const handleCompositionEnd = (field: keyof AddressForm, value: string) => {
+    setIsComposing(false);
+    
+    // 確定時にRxJSに送信
+    const updatedForm = { ...form, [field]: value };
+    formSubject$.next(updatedForm);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isValid) {
-      console.log('住所データ:', form);
       alert('住所が正常に入力されました！');
     }
   };
@@ -174,6 +210,8 @@ function App() {
                   id="city"
                   value={form.city}
                   onChange={(e) => handleInputChange('city', e.target.value)}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={(e) => handleCompositionEnd('city', (e.target as HTMLInputElement).value)}
                   placeholder="例: 新宿区"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
@@ -191,6 +229,8 @@ function App() {
                   id="town"
                   value={form.town}
                   onChange={(e) => handleInputChange('town', e.target.value)}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={(e) => handleCompositionEnd('town', (e.target as HTMLInputElement).value)}
                   placeholder="例: 西新宿"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
@@ -210,6 +250,8 @@ function App() {
                   onChange={(e) =>
                     handleInputChange('building', e.target.value)
                   }
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={(e) => handleCompositionEnd('building', (e.target as HTMLInputElement).value)}
                   placeholder="例: 新宿ビル 101号室"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
