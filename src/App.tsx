@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
-import { BehaviorSubject } from 'rxjs';
-import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
+import { BehaviorSubject, defer, EMPTY, of } from 'rxjs';
+import {
+  debounceTime,
+  distinctUntilChanged,
+  expand,
+  toArray,
+  map,
+} from 'rxjs/operators';
 
 interface AddressForm {
   postalCode: string;
@@ -54,6 +60,158 @@ const formSubject$ = new BehaviorSubject<AddressForm>({
   town: '',
   building: '',
 });
+
+// 【★defer オペレーターの詳細説明★】
+//
+// 【deferとは】
+// Observableの作成を「遅延」させるRxJSオペレーター
+// 購読されるまで実際の処理を実行せず、購読のタイミングで実行される
+//
+// 【なぜdeferが必要なのか】
+//
+// 【❌ 通常のObservable作成（即座実行）】
+// const observable = new Observable(subscriber => {
+//   const value = Math.random(); // ←ここで即座に実行される
+//   subscriber.next(value);
+// });
+//
+// 【✅ deferを使用（遅延実行）】
+// const observable = defer(() => {
+//   const value = Math.random(); // ←購読時に実行される
+//   return of(value);
+// });
+//
+// 【具体例での違い】
+// 通常のObservable：
+// const time1 = of(new Date()); // ←この時点で現在時刻を取得
+// setTimeout(() => {
+//   time1.subscribe(console.log); // ←5秒前の時刻が表示される
+// }, 5000);
+//
+// deferを使用：
+// const time2 = defer(() => of(new Date())); // ←まだ実行されない
+// setTimeout(() => {
+//   time2.subscribe(console.log); // ←購読時の現在時刻が表示される
+// }, 5000);
+//
+// 【実用例】
+// 1. API呼び出し: 購読時に最新データを取得
+// 2. 動的設定: 購読時の環境に応じて異なる処理
+// 3. 遅延初期化: 重い処理を必要時まで遅延
+// 4. テスト用データ: 毎回異なる値を生成
+//
+// 【メリット】
+// ✅ 無駄な処理を防ぐ（購読されない場合は実行されない）
+// ✅ 動的な値の生成（購読のタイミングで計算）
+// ✅ メモリ効率の向上
+// ✅ 予測可能な動作（購読時点での状態に基づく）
+//
+// 【この例では】
+// 毎回異なるランダムな値を生成するObservableを作成
+// 購読されるたびに新しい乱数が生成される
+//
+// 【適切なRxJSのパターン】
+// 同期的な値生成にはasyncは不要で、of()を使用してObservableを返す
+const query$ = defer(() => of(Math.floor(Math.random() * 1000)));
+
+// 【★expand オペレーターの詳細説明★】
+//
+// 【expandとは】
+// 再帰的に値を展開し続けるRxJSオペレーター
+// 各出力値に対して新しいObservableを作成し、そのObservableが完了するまで続ける
+// 「値を元に新しい値を生成し続ける」パターンに使用する
+//
+// 【基本的な動作】
+// 1. 初期値を受け取る
+// 2. その値に対して関数を適用してObservableを作成
+// 3. 生成されたObservableからの値を次の入力として使用
+// 4. 条件を満たすまで（またはEMPTYが返されるまで）繰り返す
+//
+// 【具体例1: 階乗の計算】
+// const factorial$ = of(1).pipe(
+//   expand((n, index) => {
+//     if (index >= 5) return EMPTY; // 5!まで計算
+//     return of(n * (index + 1));
+//   }),
+//   toArray() // [1, 1, 2, 6, 24, 120]
+// );
+//
+// 【具体例2: フィボナッチ数列】
+// const fibonacci$ = of([0, 1]).pipe(
+//   expand(([a, b]) => {
+//     if (b > 100) return EMPTY; // 100以下まで生成
+//     return of([b, a + b]);
+//   }),
+//   map(([a]) => a), // 最初の値のみ取得
+//   toArray() // [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+// );
+//
+// 【具体例3: APIページネーション】
+// const getAllPages$ = of(1).pipe(
+//   expand(pageNum => {
+//     return this.http.get(`/api/data?page=${pageNum}`).pipe(
+//       switchMap(response => {
+//         if (response.hasNextPage) {
+//           return of(pageNum + 1); // 次のページ番号を返す
+//         } else {
+//           return EMPTY; // 最後のページなので終了
+//         }
+//       })
+//     );
+//   }),
+//   mergeMap(pageNum => this.http.get(`/api/data?page=${pageNum}`))
+// );
+//
+// 【具体例4: 指数的バックオフ（リトライ処理）】
+// const retryWithBackoff$ = of(1).pipe(
+//   expand(attempt => {
+//     if (attempt > 5) return EMPTY; // 最大5回まで
+//     const delay = Math.pow(2, attempt) * 1000; // 2秒、4秒、8秒...
+//     return timer(delay).pipe(map(() => attempt + 1));
+//   }),
+//   switchMap(() => this.apiCall()) // 各attemptでAPI呼び出し
+// );
+//
+// 【住所フォームでの活用例】
+// 例：郵便番号から住所を段階的に取得
+// const addressLookup$ = of('1234567').pipe(
+//   expand(postalCode => {
+//     if (!postalCode) return EMPTY;
+//     return this.postalService.lookup(postalCode).pipe(
+//       switchMap(result => {
+//         if (result.needsMoreDetail) {
+//           return of(result.detailCode); // さらに詳細な検索
+//         } else {
+//           return EMPTY; // 検索完了
+//         }
+//       })
+//     );
+//   }),
+//   map(code => this.formatAddress(code))
+// );
+//
+// 【expandの特徴】
+// ✅ 再帰的処理: 値を元に新しい値を生成し続ける
+// ✅ 動的な深さ: 条件に応じて処理の深さが変わる
+// ✅ 非同期対応: 各ステップで非同期処理を実行可能
+// ✅ メモリ効率: 必要な分だけ値を生成
+//
+// 【注意点】
+// ⚠️ 無限ループの危険性: 必ずEMPTYを返す条件を設定する
+// ⚠️ メモリリーク: 長時間実行される場合は適切な終了条件を設定
+// ⚠️ パフォーマンス: 大量の値を生成する場合は他の方法を検討
+//
+// 【類似オペレーターとの比較】
+// - map: 1つの値を別の値に変換（1対1）
+// - switchMap: 1つの値を別のObservableに変換（1対多）
+// - expand: 1つの値を使って再帰的に複数の値を生成（1対多、再帰）
+//
+// 【実際の使用場面】
+// 1. ページネーション処理
+// 2. 階層データの取得
+// 3. 段階的な計算処理
+// 4. リトライ処理
+// 5. フラクタル的なデータ生成
 
 function App() {
   const [form, setForm] = useState<AddressForm>({
@@ -318,21 +476,158 @@ function App() {
   // このメソッドは「テスト」ボタンが押下された時に呼び出される
   // バリデーション状態に関係なく、いつでも実行可能
   const handleTest = () => {
-    console.log('=== テストボタンが押されました ===');
-    console.log('現在のフォーム状態:', form);
-    console.log('バリデーション状態:', isValid);
-    console.log('RxJS Subject の現在値:', formSubject$.value);
+    // console.log('=== テストボタンが押されました ===');
+    // console.log('現在のフォーム状態:', form);
+    // console.log('バリデーション状態:', isValid);
+    // console.log('RxJS Subject の現在値:', formSubject$.value);
 
-    // テスト用のアラートを表示
+    // 【★defer オペレーターの実例テスト★】
+    console.log('\n=== defer オペレーターのテスト ===');
+
+    // 通常のObservable（即座に時刻を記録）
+    const immediateTime = new Date().toISOString();
+    console.log('通常の時刻取得（即座実行）:', immediateTime);
+
+    // deferを使用（購読時に時刻を記録）
+    const deferredTime$ = defer(() => {
+      const currentTime = new Date().toISOString();
+      console.log('defer内で生成された時刻:', currentTime);
+      return of(currentTime);
+    });
+
+    console.log('deferredTime$を作成しました（まだ実行されていません）');
+
+    // 2秒後に購読して違いを確認
+    setTimeout(() => {
+      console.log('2秒後の通常の時刻:', immediateTime);
+      console.log('↑同じ時刻が表示される（即座実行のため）');
+
+      // deferの購読（この時点で新しい時刻を生成）
+      deferredTime$.subscribe((time) => {
+        console.log('2秒後にdeferで生成された時刻:', time);
+        console.log('↑新しい時刻が表示される（遅延実行のため）');
+      });
+    }, 2000);
+
+    // 【★expand オペレーターの実例テスト★】
+    console.log('\n=== expand オペレーターのテスト ===');
+
+    // 例1: 1から5までの数値を生成
+    const numbers$ = of(1).pipe(
+      expand((n: number) => {
+        console.log(`expand処理中: ${n}`);
+        if (n >= 5) {
+          console.log('5に達したのでEMPTYを返します');
+          return EMPTY;
+        }
+        return of(n + 1);
+      }),
+      toArray()
+    );
+
+    console.log('numbers$の処理開始:');
+    numbers$.subscribe((result: number[]) => {
+      console.log('expand で生成された数値配列:', result);
+    });
+
+    // 例2: フィボナッチ数列を生成（50以下）
+    const fibonacci$ = of([0, 1] as [number, number]).pipe(
+      expand(([a, b]: [number, number]) => {
+        console.log(`フィボナッチ処理中: [${a}, ${b}]`);
+        if (b > 50) {
+          console.log('50を超えたのでEMPTYを返します');
+          return EMPTY;
+        }
+        return of([b, a + b] as [number, number]);
+      }),
+      map(([a]: [number, number]) => a),
+      toArray()
+    );
+
+    console.log('\nフィボナッチ数列の処理開始:');
+    fibonacci$.subscribe((result: number[]) => {
+      console.log('expand で生成されたフィボナッチ数列:', result);
+    });
+
+    // 例3: 郵便番号からの段階的検索シミュレーション
+    if (form.postalCode && form.postalCode.length >= 3) {
+      console.log('\n=== 郵便番号での expand 使用例 ===');
+
+      type AddressStep = { code: string; step: string };
+
+      const addressLookup$ = of({
+        code: form.postalCode,
+        step: 'postal',
+      } as AddressStep).pipe(
+        expand((item: AddressStep) => {
+          console.log(`住所検索処理中: ${item.code} (ステップ: ${item.step})`);
+
+          if (item.step === 'postal') {
+            console.log('郵便番号から都道府県を検索中...');
+            return of({ code: `${item.code}-prefecture`, step: 'prefecture' });
+          } else if (item.step === 'prefecture') {
+            console.log('都道府県から市区町村を検索中...');
+            return of({ code: `${item.code}-city`, step: 'city' });
+          } else if (item.step === 'city') {
+            console.log('市区町村から町域を検索中...');
+            return of({ code: `${item.code}-town`, step: 'town' });
+          } else {
+            console.log('検索完了');
+            return EMPTY;
+          }
+        }),
+        map((item: AddressStep) => item.code),
+        toArray()
+      );
+
+      addressLookup$.subscribe((result: string[]) => {
+        console.log('段階的な住所検索結果:', result);
+      });
+    } else {
+      console.log(
+        '郵便番号が未入力または3桁未満のため、expand の住所検索例はスキップします'
+      );
+    }
+
+    // 【元のquery$を使った実例】
+    console.log('\n=== query$（defer）とexpandの組み合わせ ===');
+
+    query$
+      .pipe(
+        expand((result, index) => {
+          console.log(`query$の結果: ${result}, 回数: ${index + 1}`);
+          // 3回まで実行、かつ結果が500未満の場合は継続
+          if (index >= 2 || result >= 500) {
+            console.log('条件を満たしたので終了');
+            return EMPTY;
+          }
+          console.log('条件を満たしていないので再実行');
+          return query$; // 再度deferを実行
+        }),
+        toArray()
+      )
+      .subscribe((result) => {
+        console.log('query$ + expand の最終結果:', result);
+      });
+
+    // // ブラウザのコンソールを確認するメッセージ
     // alert(
     //   `テストボタンが押されました！\n\n` +
-    //   `現在の入力状況:\n` +
-    //   `・郵便番号: ${form.postalCode || '未入力'}\n` +
-    //   `・都道府県: ${form.prefecture || '未選択'}\n` +
-    //   `・市区町村: ${form.city || '未入力'}\n` +
-    //   `・町域: ${form.town || '未入力'}\n` +
-    //   `・建物名: ${form.building || '未入力'}\n\n` +
-    //   `バリデーション結果: ${isValid ? '有効' : '無効'}`
+    //     `ブラウザの開発者ツール（F12）の\n` +
+    //     `コンソールタブを確認してください。\n\n` +
+    //     `defer と expand の動作例が\n` +
+    //     `詳しく表示されています。\n\n` +
+    //     `特に以下に注目してください：\n` +
+    //     `• deferの遅延実行（2秒後の時刻比較）\n` +
+    //     `• expandの再帰処理（数値とフィボナッチ）\n` +
+    //     `• 段階的な住所検索シミュレーション\n\n` +
+    //     `現在の入力状況:\n` +
+    //     `・郵便番号: ${form.postalCode || '未入力'}\n` +
+    //     `・都道府県: ${form.prefecture || '未選択'}\n` +
+    //     `・市区町村: ${form.city || '未入力'}\n` +
+    //     `・町域: ${form.town || '未入力'}\n` +
+    //     `・建物名: ${form.building || '未入力'}\n\n` +
+    //     `バリデーション結果: ${isValid ? '有効' : '無効'}`
     // );
   };
 
